@@ -1,5 +1,5 @@
 from __future__ import print_function
-import btle
+from bluepy import btle
 import myo_dicts
 import struct
 import socket
@@ -19,6 +19,7 @@ import os
 # Free to modify and use as you wish, so long as my name remains in this file.
 # Special thanks to the support at Thalmic labs for their help, and to IanHarvey for bluepy
 
+# Slight cleanup and modification by Andrey Alekseenko (al42and)
 
 # Notes
 # If the Myo is unsynced while the program is running, you will need to plug it in and let it fall asleep before poses will work again.
@@ -34,16 +35,27 @@ log.basicConfig(filename=PATH+"/dongleless.log", filemode = 'w', level = log.CRI
 class Connection(btle.Peripheral):
 	def __init__(self, mac):
 		btle.Peripheral.__init__(self, mac)
+		self.subscribe()
 
-		# self.writeCharacteristic(0x19, struct.pack('<bbbbb', 0,0,0,3,1) ,True ) # Tell the myo we want neither IMU nor classifier data
-		# self.writeCharacteristic(0x24, struct.pack('<bb', 0x00, 0x00),True) # Unsubscribe from classifier indications
-
-		# time.sleep(0.5)
- 
+	def subscribe(self):
 		self.writeCharacteristic(0x24, struct.pack('<bb', 0x02, 0x00),True) # Subscribe to classifier indications
 		self.writeCharacteristic(0x1d, struct.pack('<bb', 0x01, 0x00),True) # Subscribe to imu notifications
 		self.writeCharacteristic(0x28, struct.pack('<bb', 0x01, 0x00),True) # Subscribe to emg notifications
-		self.writeCharacteristic(0x19, struct.pack('<bbbbb', 1,1,1,3,1) ,True ) # Tell the myo we want all the data
+
+	def setMode(self, emg_mode, imu_mode, classifier_mode):
+		# For some reason, to enable EMG we must use mode 0x01, unlike 0x02 like myohw.h says
+		self.writeCharacteristic(0x19, struct.pack('<bbbbb', 0x01, 0x03, emg_mode,imu_mode,classifier_mode) ,True)
+
+	def setSleep(self, sleep_mode):
+		"""0 - normal, 1 - never sleep"""
+		self.writeCharacteristic(0x19, struct.pack('<bbb', 0x09, 0x01, sleep_mode) ,True)
+
+	def deepSleep(self):
+		self.writeCharacteristic(0x19, struct.pack('<bb', 0x04, 0x00) ,True)
+
+	def setLeds(self, logo_r, logo_g, logo_b, line_r, line_g, line_b):
+		"""The numerical value indicates blinking period of respective LED"""
+		self.writeCharacteristic(0x19, struct.pack('<bbbbbbbb', 0x06, 0x06, logo_r, logo_g, logo_b, line_r, line_g, line_b),True)
 
 	def vibrate(self, length):
 		self.writeCharacteristic(0x19, struct.pack('<bbb', 0x03, 0x01, length),True)
@@ -60,31 +72,21 @@ class MyoDelegate(btle.DefaultDelegate):
 			data=struct.unpack('>6b',data) #sometimes gets the poses mixed up, if this happens, try wearing it in a different orientation.
 			if data[0] == 3: # CLassifier
 				ev_type = myo_dicts.pose[data[1]]
-				# print(ev_type)
-				if data[1] != 0:
-					self.myo.writeCharacteristic(0x19, struct.pack('<bbb', 0x03, 0x01, 0x01),True)
 
-			else:
-				if data[0] == 1: #sync
-					log.info("Arm synced")
-					ev_type = "arm_synced"
-					#rewrite handles
-					self.myo.writeCharacteristic(0x19, struct.pack('<bbbbb', 1,1,0,3,1) ,True ) # Tell the myo we want IMU and classifier data
-					self.myo.writeCharacteristic(0x24, struct.pack('<bb', 0x02, 0x00),True) # Subscribe to classifier indications
-					self.myo.writeCharacteristic(0x28, struct.pack('<bb', 0x00, 0x00),True) # Subscribe to classifier indications
-					self.myo.writeCharacteristic(0x1d, struct.pack('<bb', 0x01, 0x00),True) # Subscribe to classifier indications
-					# self.myo.writeCharacteristic(0x1d, struct.pack('<bb', 0x01, 0x00),True) # Subscribe to IMU notifications
+			elif data[0] == 1: #sync
+				log.info("Arm synced")
+				ev_type = "arm_synced"
+				#rewrite handles
+				if data[1] == 2: #left arm
+					self.arm = "left"
+				elif data[1] == 1: #right arm
+					self.arm = "right"
+				else:
+					self.arm = "unknown"
+				if 'arm_synced' in self.bindings:
+					self.bindings['arm_synced'](self.myo, myo_dicts.x_direction[data[2]], myo_dicts.arm[data[1]])
+				return
 
-					if data[1] == 2: #left arm
-						self.arm = "left"
-					elif data[1] == 1: #right arm
-						self.arm = "right"
-					else:
-						self.arm = "unknown"
-					if 'arm_synced' in self.bindings:
-						self.bindings['arm_synced'](self.myo, myo_dicts.x_direction[data[2]], myo_dicts.arm[data[1]])
-					return
-			
 			if ev_type in self.bindings:
 				self.bindings[ev_type](self.myo)
 		
@@ -183,6 +185,7 @@ def run(modes):
 						time.sleep(0.5)
 					else:
 						log.info("Found Myo at MAC: %s" % mac)
+			p.setMode(1,3,1) # Enable all events
 			p.setDelegate( MyoDelegate(modes, p))
 
 			# Maybe try starting a new thread instead? *Might* work with multiple myos then.
@@ -201,3 +204,4 @@ def run(modes):
 		# except:
 		#     log.critical("Unexpected error:", sys.exc_info()[0])
 	log.warning("Program stopped")
+
