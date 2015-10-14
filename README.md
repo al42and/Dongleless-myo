@@ -1,6 +1,12 @@
 #Dongleless Myo
 =======================
 
+This is a fork of https://github.com/mamo91/Dongleless-myo.
+
+I (al42and) added some functionality to modify Myo state, and also cleaned up code slightly. It was all made for fun and personal use, so whatever.
+
+Here goes original README:
+
 For if you don't have your dongle but just need to control a linux system anyway, with a different dongle or you computer's built in bluetooth.
 
 
